@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Boat Movement Demo</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background: #a3d2ca;
+      width: 100%;
+      height: 100%;
+    }
+    canvas {
+      display: block;
+      background-color: #062936;
+      width: 100vw;
+      height: 100vh;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="gameCanvas"></canvas>
+  <script>
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+
+    const boat = {
+      x: 0,
+      y: 0,
+      angle: 0,
+      speed: 0,
+      maxSpeed: 3,
+      acceleration: 0.05,
+      friction: 0.98,
+      turnSpeed: 0.05,
+      turnVelocity: 0
+    };
+
+    function resizeCanvas() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      if (boat.x === 0 && boat.y === 0 || boat.x > canvas.width || boat.y > canvas.height) {
+        boat.x = canvas.width / 2;
+        boat.y = canvas.height / 2;
+      }
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    const keys = { w: false, s: false, a: false, d: false };
+    const bubbles = [], ripples = [];
+    let rippleFrameCounter = 0;
+
+    function drawBoat() {
+      const boatImage = new Image();
+      boatImage.src = 'assets/fishingboat-001.svg';
+      ctx.save();
+      const scale = 1 + Math.sin(Date.now() / 1200) * 0.005;
+      ctx.translate(boat.x, boat.y);
+      ctx.scale(scale, scale);
+      ctx.rotate(boat.angle);
+      ctx.drawImage(boatImage, -15, -30, 30, 60);
+      ctx.restore();
+    }
+
+    function updateBoat() {
+      let targetSpeed = 0;
+      if (keys.w) targetSpeed = boat.maxSpeed;
+      if (keys.s) targetSpeed = -boat.maxSpeed * 0.5;
+      boat.speed += (targetSpeed - boat.speed) * 0.025;
+      boat.speed *= boat.friction;
+
+      const turningFactor = 1.5 - Math.min(Math.abs(boat.speed) / boat.maxSpeed, 1);
+      if (boat.speed > 0) {
+        if (keys.a) boat.turnVelocity -= 0.002 * turningFactor;
+        if (keys.d) boat.turnVelocity += 0.002 * turningFactor;
+      }
+      boat.turnVelocity *= 0.9;
+      boat.angle += boat.turnVelocity;
+
+      if (boat.speed > 0) {
+        boat.x += Math.sin(boat.angle) * boat.speed;
+        boat.y -= Math.cos(boat.angle) * boat.speed;
+      }
+
+      if (boat.speed > 0) {
+        const driftX = Math.sin(boat.angle + Math.PI / 2) * boat.speed * 0.05;
+        const driftY = -Math.cos(boat.angle + Math.PI / 2) * boat.speed * 0.05;
+        boat.x += driftX;
+        boat.y += driftY;
+      }
+
+      if (boat.speed > 0.5) {
+        const offsetX = -Math.sin(boat.angle) * 15;
+        const offsetY = Math.cos(boat.angle) * 15;
+        if (keys.w) {
+          bubbles.push({
+            x: boat.x + offsetX + (Math.random() * 4 - 2),
+            y: boat.y + offsetY + (Math.random() * 4 - 2),
+            radius: Math.random() * 1.5 + 0.5,
+            opacity: 1
+          });
+        }
+        rippleFrameCounter++;
+        if (rippleFrameCounter % 3 === 0) {
+          const rippleSize = Math.min(boat.speed * 5, 15);
+          const rippleOpacity = Math.min(boat.speed / boat.maxSpeed, 1) * 0.2;
+          ripples.push({
+            x: boat.x + offsetX,
+            y: boat.y + offsetY,
+            radius: rippleSize,
+            opacity: rippleOpacity
+          });
+        }
+      }
+    }
+
+    function drawBubbles() {
+      for (let i = 0; i < bubbles.length; i++) {
+        const b = bubbles[i];
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(255, 255, 255, ${b.opacity})`;
+        ctx.fill();
+        b.opacity -= 0.01;
+      }
+      while (bubbles.length > 100) bubbles.shift();
+    }
+
+    function drawRipples() {
+      for (let i = 0; i < ripples.length; i++) {
+        const r = ripples[i];
+        ctx.beginPath();
+        ctx.arc(r.x, r.y, r.radius, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(255, 255, 255, ${r.opacity})`;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        r.radius += 0.4;
+        r.opacity -= 0.004;
+      }
+      while (ripples.length > 150) ripples.shift();
+    }
+
+    function loop() {
+      updateFish();
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      updateBoat();
+      drawRipples();
+      drawBubbles();
+      drawFish();
+      drawBoat();
+      requestAnimationFrame(loop);
+    }
+
+    document.addEventListener('keydown', e => {
+      if (e.key.toLowerCase() in keys) keys[e.key.toLowerCase()] = true;
+    });
+    document.addEventListener('keyup', e => {
+      if (e.key.toLowerCase() in keys) keys[e.key.toLowerCase()] = false;
+    });
+
+    const fish = Array.from({ length: 50 }, () => ({
+      x: Math.random() * canvas.width,
+      y: Math.random() * canvas.height,
+      radius: 6,
+      direction: Math.random() * 2 * Math.PI
+    }));
+
+    const fishImage = new Image();
+    fishImage.src = 'assets/fish-001.svg';
+
+    function updateFish() {
+      const fishSpeed = 0.05;
+      const perceptionRadius = 100;
+
+      for (let i = 0; i < fish.length; i++) {
+        const f = fish[i];
+        if (!f.vx) f.vx = Math.cos(f.direction) * fishSpeed;
+        if (!f.vy) f.vy = Math.sin(f.direction) * fishSpeed;
+
+        let centerX = 0;
+        let centerY = 0;
+        let avgDir = 0;
+        let avoidX = 0;
+        let avoidY = 0;
+        let count = 0;
+
+        for (let j = 0; j < fish.length; j++) {
+          if (i !== j) {
+            const other = fish[j];
+            const dx = other.x - f.x;
+            const dy = other.y - f.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+
+            if (dist < perceptionRadius) {
+              centerX += other.x;
+              centerY += other.y;
+              avgDir += other.direction;
+              count++;
+            }
+          }
+        }
+
+        if (count > 0) {
+          centerX /= count;
+          centerY /= count;
+          avgDir /= count;
+
+          const steerX = (centerX - f.x) * 0.005;
+          const steerY = (centerY - f.y) * 0.005;
+
+          const steerAngle = Math.atan2(steerY, steerX);
+          const angleDiff = ((steerAngle - f.direction + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+          f.direction += angleDiff * 0.05;
+
+          f.vx += Math.cos(f.direction) * 0.01;
+          f.vy += Math.sin(f.direction) * 0.01;
+        }
+
+        f.x += f.vx;
+        f.y += f.vy;
+
+        f.vx *= 0.95;
+        f.vy *= 0.95;
+
+        if (f.x < 0) { f.x = 0; f.direction += Math.PI; }
+        if (f.x > canvas.width) { f.x = canvas.width; f.direction += Math.PI; }
+        if (f.y < 0) { f.y = 0; f.direction += Math.PI; }
+        if (f.y > canvas.height) { f.y = canvas.height; f.direction += Math.PI; }
+      }
+    }
+
+    function drawFish() {
+      for (let f of fish) {
+        ctx.save();
+        ctx.translate(f.x, f.y);
+        ctx.rotate(f.direction);
+        ctx.drawImage(fishImage, -1, -1, 2, 2);
+        ctx.restore();
+      }
+    }
+
+    fishImage.onload = () => {
+      loop();
+    };
+  </script>
+</body>
+</html>
