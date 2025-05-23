@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Boat Movement Demo</title>
+  <title>Boat Exploration</title>
   <style>
     html, body {
       margin: 0;
@@ -23,46 +23,198 @@
 </head>
 <body>
   <canvas id="gameCanvas"></canvas>
-  <script>
+  <script src="https://cdn.jsdelivr.net/npm/simplex-noise@2.4.0/simplex-noise.min.js"></script>
+<script>
     const canvas = document.getElementById("gameCanvas");
     const ctx = canvas.getContext("2d");
 
-    const boat = {
-      x: 0,
-      y: 0,
-      angle: 0,
-      speed: 0,
-      maxSpeed: 3,
-      acceleration: 0.05,
-      friction: 0.98,
-      turnSpeed: 0.05,
-      turnVelocity: 0
-    };
+    let mouseX = 0;
+    let mouseY = 0;
+    canvas.addEventListener('mousemove', e => {
+      mouseX = e.clientX;
+      mouseY = e.clientY;
+    });
 
-    function resizeCanvas() {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      if (boat.x === 0 && boat.y === 0 || boat.x > canvas.width || boat.y > canvas.height) {
-        boat.x = canvas.width / 2;
-        boat.y = canvas.height / 2;
-      }
-    }
-    window.addEventListener('resize', resizeCanvas);
-    resizeCanvas();
+    // --- Muzzle flash state ---
+    let muzzleFlashTimer = 0;
+    const muzzleFlashImage = new Image();
+    muzzleFlashImage.src = 'assets/muzzleflash-001.svg';
+    const bulletImage = new Image();
+    bulletImage.src = 'assets/bullet-001.svg';
+
+    const boat = {
+  health: 100,
+  x: Math.random() * 5000 - 2500,
+  y: Math.random() * 5000 - 2500,
+  angle: 0,
+  speed: 0,
+  maxSpeed: 6,
+  acceleration: 0.1,
+  friction: 0.98,
+  turnSpeed: 0.1,
+  turnVelocity: 0
+};
+
+const enemyBoats = Array.from({ length: 3 }, () => ({
+  health: 100,
+  x: Math.random() * 5000 - 2500,
+  y: Math.random() * 5000 - 2500,
+  angle: Math.random() * Math.PI * 2,
+  speed: 0,
+  maxSpeed: 2.5,
+  acceleration: 0.05,
+  friction: 0.98,
+  turnVelocity: 0,
+  targetAngle: Math.random() * Math.PI * 2
+}));
 
     const keys = { w: false, s: false, a: false, d: false };
     const bubbles = [], ripples = [];
     let rippleFrameCounter = 0;
+    let cameraX = 0, cameraY = 0;
+
+    const islandChunks = new Map();
+    const CHUNK_SIZE = 1000;
+
+    function resizeCanvas() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    function seededRandom(seed) {
+      let x = Math.sin(seed) * 10000;
+      return x - Math.floor(x);
+    }
+
+    function generateIslandsInChunk(chunkX, chunkY) {
+      const key = `${chunkX},${chunkY}`;
+      if (islandChunks.has(key)) return;
+
+      const islands = [];
+      const seedBase = chunkX * 73856093 ^ chunkY * 19349663;
+      const numClusters = 2 + Math.floor(seededRandom(seedBase) * 3);
+
+      for (let c = 0; c < numClusters; c++) {
+        const clusterSeed = seedBase + c * 100;
+        const clusterX = seededRandom(clusterSeed) * CHUNK_SIZE;
+        const clusterY = seededRandom(clusterSeed + 1) * CHUNK_SIZE;
+        const clusterCount = 2 + Math.floor(seededRandom(clusterSeed + 2) * 3);
+
+        for (let i = 0; i < clusterCount; i++) {
+          const angle = seededRandom(clusterSeed + 3 + i) * Math.PI * 2;
+          const distance = seededRandom(clusterSeed + 4 + i) * 100;
+          const rx = clusterX + Math.cos(angle) * distance;
+          const ry = clusterY + Math.sin(angle) * distance;
+          const size = 40 + seededRandom(clusterSeed + 5 + i) * 80;
+          const island = generateIsland(chunkX * CHUNK_SIZE + rx, chunkY * CHUNK_SIZE + ry, size, clusterSeed + 6 + i);
+          islands.push(island);
+        }
+      }
+
+      islandChunks.set(key, islands);
+    }
+
+    function generateIsland(x, y, size, seed = 1) {
+      const noise = new SimplexNoise(seed.toString());
+      const points = [];
+      const vertices = 90;
+      const baseRadius = size;
+      const roughness = 0.5;
+
+      // random offset per island to avoid identical results
+      const offsetX = Math.random() * 1000;
+      const offsetY = Math.random() * 1000;
+
+      for (let i = 0; i < vertices; i++) {
+        const angle = (Math.PI * 2 * i) / vertices;
+        const nx = Math.cos(angle);
+        const ny = Math.sin(angle);
+        const distance = noise.noise2D(nx + offsetX, ny + offsetY);
+        const radius = baseRadius * (1 + distance * roughness);
+        points.push([
+          x + nx * radius,
+          y + ny * radius
+        ]);
+      }
+
+      return points;
+    }
+
+    function drawIslands() {
+      const cx = Math.floor(boat.x / CHUNK_SIZE);
+      const cy = Math.floor(boat.y / CHUNK_SIZE);
+
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          const chunkX = cx + dx;
+          const chunkY = cy + dy;
+          generateIslandsInChunk(chunkX, chunkY);
+          const key = `${chunkX},${chunkY}`;
+          for (let island of islandChunks.get(key)) {
+            ctx.beginPath();
+            ctx.moveTo(island[0][0] - cameraX, island[0][1] - cameraY);
+            for (let [px, py] of island.slice(1)) ctx.lineTo(px - cameraX, py - cameraY);
+            ctx.closePath();
+            ctx.fillStyle = "#4d774e";
+            ctx.fill();
+          }
+        }
+      }
+    }
 
     function drawBoat() {
+  drawEnemyBoats();
+
+  // Draw player health
+  ctx.save();
+  ctx.fillStyle = 'white';
+  ctx.font = '12px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(`${Math.round(boat.health)}%`, canvas.width / 2, canvas.height / 2 - 50);
+  ctx.restore();
+  drawEnemyBoats();
       const boatImage = new Image();
       boatImage.src = 'assets/fishingboat-001.svg';
       ctx.save();
       const scale = 1 + Math.sin(Date.now() / 1200) * 0.005;
-      ctx.translate(boat.x, boat.y);
+      ctx.translate(canvas.width / 2, canvas.height / 2);
       ctx.scale(scale, scale);
       ctx.rotate(boat.angle);
       ctx.drawImage(boatImage, -15, -30, 30, 60);
+
+      // Draw rudder using SVG
+      const rudderImage = new Image();
+      rudderImage.src = 'assets/rudder-001.svg';
+      const rudderAngle = Math.max(-0.5, Math.min(0.5, -boat.turnVelocity * 50 * Math.min(1, Math.abs(boat.turnVelocity) * 20)));
+      ctx.save();
+      ctx.translate(0, 33);
+      ctx.rotate(rudderAngle);
+      ctx.drawImage(rudderImage, -2, 0, 4, 8);
+      ctx.restore();
+
+      // Draw gun turret using SVG
+      const gunImage = new Image();
+      gunImage.src = 'assets/gun-001.svg';
+
+      const globalMouseX = mouseX + cameraX;
+      const globalMouseY = mouseY + cameraY;
+      const angleToMouse = Math.atan2(globalMouseY - boat.y, globalMouseX - boat.x);
+
+      ctx.save();
+      ctx.translate(0, 0);
+      ctx.rotate(angleToMouse - boat.angle + Math.PI / 2);
+      ctx.drawImage(gunImage, -5, -16, 10, 32); // centered and scaled
+
+      // Draw muzzle flash if active
+      if (muzzleFlashTimer > 0) {
+        ctx.translate(0, -24);
+        ctx.drawImage(muzzleFlashImage, -8, -8, 16, 16);
+      }
+
+      ctx.restore();
+
       ctx.restore();
     }
 
@@ -73,10 +225,11 @@
       boat.speed += (targetSpeed - boat.speed) * 0.025;
       boat.speed *= boat.friction;
 
-      const turningFactor = 1.5 - Math.min(Math.abs(boat.speed) / boat.maxSpeed, 1);
-      if (boat.speed > 0) {
-        if (keys.a) boat.turnVelocity -= 0.002 * turningFactor;
-        if (keys.d) boat.turnVelocity += 0.002 * turningFactor;
+      const turningFactor = 1.5 - Math.min(Math.abs(boat.speed) / boat.maxSpeed, 1) * 0.5;
+      if (boat.speed > 0.1) {
+        const turnAmount = 0.004 * turningFactor;
+        if (keys.a) boat.turnVelocity -= turnAmount;
+        if (keys.d) boat.turnVelocity += turnAmount;
       }
       boat.turnVelocity *= 0.9;
       boat.angle += boat.turnVelocity;
@@ -84,9 +237,7 @@
       if (boat.speed > 0) {
         boat.x += Math.sin(boat.angle) * boat.speed;
         boat.y -= Math.cos(boat.angle) * boat.speed;
-      }
 
-      if (boat.speed > 0) {
         const driftX = Math.sin(boat.angle + Math.PI / 2) * boat.speed * 0.05;
         const driftY = -Math.cos(boat.angle + Math.PI / 2) * boat.speed * 0.05;
         boat.x += driftX;
@@ -122,7 +273,7 @@
       for (let i = 0; i < bubbles.length; i++) {
         const b = bubbles[i];
         ctx.beginPath();
-        ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
+        ctx.arc(b.x - cameraX, b.y - cameraY, b.radius, 0, Math.PI * 2);
         ctx.fillStyle = `rgba(255, 255, 255, ${b.opacity})`;
         ctx.fill();
         b.opacity -= 0.01;
@@ -134,7 +285,7 @@
       for (let i = 0; i < ripples.length; i++) {
         const r = ripples[i];
         ctx.beginPath();
-        ctx.arc(r.x, r.y, r.radius, 0, Math.PI * 2);
+        ctx.arc(r.x - cameraX, r.y - cameraY, r.radius, 0, Math.PI * 2);
         ctx.strokeStyle = `rgba(255, 255, 255, ${r.opacity})`;
         ctx.lineWidth = 1;
         ctx.stroke();
@@ -144,13 +295,142 @@
       while (ripples.length > 150) ripples.shift();
     }
 
-    function loop() {
-      updateFish();
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    function updateCamera() {
+      cameraX = boat.x - canvas.width / 2;
+      cameraY = boat.y - canvas.height / 2;
+    }
+
+  function updateEnemies() {
+  // Remove dead enemies
+  for (let i = enemyBoats.length - 1; i >= 0; i--) {
+    if (enemyBoats[i].health <= 0) {
+      enemyBoats.splice(i, 1);
+    }
+  }
+  // Update movement and AI for remaining enemies
+  for (let boat of enemyBoats) {
+    const angleDiff = ((boat.targetAngle - boat.angle + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+    boat.turnVelocity += angleDiff * 0.005;
+    boat.turnVelocity *= 0.9;
+    boat.angle += boat.turnVelocity;
+
+    boat.speed += (boat.maxSpeed - boat.speed) * boat.acceleration;
+    boat.speed *= boat.friction;
+
+    boat.x += Math.sin(boat.angle) * boat.speed;
+    boat.y -= Math.cos(boat.angle) * boat.speed;
+
+    const offsetX = -Math.sin(boat.angle) * 15;
+    const offsetY = Math.cos(boat.angle) * 15;
+    if (boat.speed > 0.5) {
+      bubbles.push({
+        x: boat.x + offsetX + (Math.random() * 4 - 2),
+        y: boat.y + offsetY + (Math.random() * 4 - 2),
+        radius: Math.random() * 1.5 + 0.5,
+        opacity: 1
+      });
+    }
+    if (boat.speed > 0.5) {
+      rippleFrameCounter++;
+      if (rippleFrameCounter % 3 === 0) {
+        const rippleSize = Math.min(boat.speed * 5, 15);
+        const rippleOpacity = Math.min(boat.speed / boat.maxSpeed, 1) * 0.2;
+        ripples.push({
+          x: boat.x + offsetX,
+          y: boat.y + offsetY,
+          radius: rippleSize,
+          opacity: rippleOpacity
+        });
+      }
+    }
+
+    if (Math.random() < 0.01) boat.targetAngle = Math.random() * Math.PI * 2;
+
+    // --- Keep your AI shooting/logic here if you add it later ---
+  }
+}
+
+
+    if (Math.random() < 0.01) boat.targetAngle = Math.random() * Math.PI * 2;
+
+function drawEnemyBoats() {
+  const boatImage = new Image();
+  boatImage.src = 'assets/fishingboat-001.svg';
+  for (let b of enemyBoats) {
+    ctx.save();
+    ctx.translate(b.x - cameraX, b.y - cameraY);
+    ctx.rotate(b.angle);
+    ctx.drawImage(boatImage, -15, -30, 30, 60);
+
+    const gunImage = new Image();
+    gunImage.src = 'assets/gun-001.svg';
+    ctx.save();
+    ctx.rotate(Math.PI / 2);
+    ctx.drawImage(gunImage, -5, -16, 10, 32);
+    ctx.restore();
+
+    ctx.restore();
+
+    // Draw health bar
+    ctx.save();
+    ctx.fillStyle = 'white';
+    ctx.font = '12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`${Math.round(b.health)}%`, b.x - cameraX, b.y - cameraY - 40);
+    ctx.restore();
+    ctx.restore();
+
+    ctx.restore();
+  }
+}
+
+function loop() {
+  if (firing && fireCooldown <= 0) {
+    shootBullet();
+    fireCooldown = 10;
+  }
+  if (fireCooldown > 0) fireCooldown--;
       updateBoat();
+      updateEnemies();
+      updateCamera();
+
+      // Decrement muzzle flash timer
+      if (muzzleFlashTimer > 0) muzzleFlashTimer--;
+
+      for (let bullet of bullets) {
+        bullet.x += Math.cos(bullet.angle) * bullet.speed;
+        bullet.y += Math.sin(bullet.angle) * bullet.speed;
+        bullet.life--;
+
+        // Check collision with enemy boats
+        for (let i = 0; i < enemyBoats.length; i++) {
+          const e = enemyBoats[i];
+          const dx = bullet.x - e.x;
+          const dy = bullet.y - e.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < 20) {
+            e.health -= 10;
+            bullet.life = 0;
+          }
+        }
+      }
+      for (let i = bullets.length - 1; i >= 0; i--) {
+        if (bullets[i].life <= 0) bullets.splice(i, 1);
+      }
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      drawIslands();
       drawRipples();
       drawBubbles();
-      drawFish();
+
+      // Draw SVG bullets
+      for (let bullet of bullets) {
+        ctx.save();
+        ctx.translate(bullet.x - cameraX, bullet.y - cameraY);
+        ctx.rotate(bullet.angle - Math.PI / 2); // Top of SVG points forward
+        ctx.drawImage(bulletImage, -2, -4, 4, 8);
+        ctx.restore();
+      }
       drawBoat();
       requestAnimationFrame(loop);
     }
@@ -162,90 +442,35 @@
       if (e.key.toLowerCase() in keys) keys[e.key.toLowerCase()] = false;
     });
 
-    const fish = Array.from({ length: 50 }, () => ({
-      x: Math.random() * canvas.width,
-      y: Math.random() * canvas.height,
-      radius: 6,
-      direction: Math.random() * 2 * Math.PI
-    }));
+    // Bullet setup
+    const bullets = [];
+    let firing = false;
+let fireCooldown = 0;
 
-    const fishImage = new Image();
-    fishImage.src = 'assets/fish-001.svg';
+canvas.addEventListener('mousedown', () => firing = true);
+canvas.addEventListener('mouseup', () => firing = false);
 
-    function updateFish() {
-      const fishSpeed = 0.05;
-      const perceptionRadius = 100;
+function shootBullet() {
+  const globalMouseX = mouseX + cameraX;
+  const globalMouseY = mouseY + cameraY;
+  const angle = Math.atan2(globalMouseY - boat.y, globalMouseX - boat.x);
+  const barrelOffset = 25;
+  const bulletX = boat.x + Math.cos(angle) * barrelOffset;
+  const bulletY = boat.y + Math.sin(angle) * barrelOffset;
 
-      for (let i = 0; i < fish.length; i++) {
-        const f = fish[i];
-        if (!f.vx) f.vx = Math.cos(f.direction) * fishSpeed;
-        if (!f.vy) f.vy = Math.sin(f.direction) * fishSpeed;
+  // Muzzle flash: show for a few frames
+  muzzleFlashTimer = 6;
 
-        let centerX = 0;
-        let centerY = 0;
-        let avgDir = 0;
-        let avoidX = 0;
-        let avoidY = 0;
-        let count = 0;
+  bullets.push({
+    x: bulletX,
+    y: bulletY,
+    angle: angle,
+    speed: 8,
+    life: 120
+  });
+}
 
-        for (let j = 0; j < fish.length; j++) {
-          if (i !== j) {
-            const other = fish[j];
-            const dx = other.x - f.x;
-            const dy = other.y - f.y;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-
-            if (dist < perceptionRadius) {
-              centerX += other.x;
-              centerY += other.y;
-              avgDir += other.direction;
-              count++;
-            }
-          }
-        }
-
-        if (count > 0) {
-          centerX /= count;
-          centerY /= count;
-          avgDir /= count;
-
-          const steerX = (centerX - f.x) * 0.005;
-          const steerY = (centerY - f.y) * 0.005;
-
-          const steerAngle = Math.atan2(steerY, steerX);
-          const angleDiff = ((steerAngle - f.direction + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
-          f.direction += angleDiff * 0.05;
-
-          f.vx += Math.cos(f.direction) * 0.01;
-          f.vy += Math.sin(f.direction) * 0.01;
-        }
-
-        f.x += f.vx;
-        f.y += f.vy;
-
-        f.vx *= 0.95;
-        f.vy *= 0.95;
-
-        if (f.x < 0) { f.x = 0; f.direction += Math.PI; }
-        if (f.x > canvas.width) { f.x = canvas.width; f.direction += Math.PI; }
-        if (f.y < 0) { f.y = 0; f.direction += Math.PI; }
-        if (f.y > canvas.height) { f.y = canvas.height; f.direction += Math.PI; }
-      }
-    }
-
-    function drawFish() {
-      for (let f of fish) {
-        ctx.save();
-        ctx.translate(f.x, f.y);
-        ctx.rotate(f.direction);
-        ctx.drawImage(fishImage, -1, -1, 2, 2);
-        ctx.restore();
-      }
-    }
-
-    fishImage.onload = () => {
-      loop();
-    };
+    loop();
   </script>
 </body>
 </html>
